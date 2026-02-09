@@ -8,31 +8,51 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 3600
 
+    defaults:
+      run:
+        shell: powershell -Version 5.1
+
     steps:
       - name: Enable Remote Desktop
-        shell: powershell
         run: |
+          Write-Host "Enabling RDP..."
+
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
           Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
+
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service TermService -Force
 
-      - name: Create RDP User
-        shell: powershell
+          Write-Host "RDP Ready."
+
+      - name: Create Admin User
         run: |
-          $u="runneradmin"
-          $p="P@ssw0rd123!"
-          New-LocalUser $u -Password (ConvertTo-SecureString $p -AsPlainText -Force)
-          Add-LocalGroupMember -Group "Administrators" -Member $u
-          Write-Host "USER: $u"
-          Write-Host "PASS: $p"
+          $username = "runneradmin"
+          $password = "P@ssw0rd123!"
+
+          $sec = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser $username -Password $sec
+          Add-LocalGroupMember -Group "Administrators" -Member $username
+
+          Write-Host ""
+          Write-Host "==============================="
+          Write-Host "LOGIN DETAILS"
+          Write-Host "Username: $username"
+          Write-Host "Password: $password"
+          Write-Host "==============================="
+          Write-Host ""
 
       - name: Install Tailscale
-        shell: powershell
-        run: choco install tailscale -y
+        run: |
+          choco install tailscale -y
 
-      - name: Connect Tailscale
-        shell: powershell
+      - name: Connect to Tailscale
         run: |
           tailscale up --authkey=${{ secrets.TS_AUTHKEY }}
-          tailscale ip -4
+          $ip = tailscale ip -4
+          Write-Host ""
+          Write-Host "==============================="
+          Write-Host "Tailscale IP: $ip"
+          Write-Host "Port: 3389"
+          Write-Host "==============================="
+          Write-Host ""
