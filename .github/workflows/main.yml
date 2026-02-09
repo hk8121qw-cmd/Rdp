@@ -12,32 +12,27 @@ jobs:
       - name: Enable Remote Desktop
         shell: powershell
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server" -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path "HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" -Name "UserAuthentication" -Value 0
           Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
           Restart-Service TermService -Force
 
       - name: Create RDP User
         shell: powershell
         run: |
-          $username = "runneradmin"
-          $password = "P@ssw0rd123!"
-          $secpass = ConvertTo-SecureString $password -AsPlainText -Force
-          New-LocalUser $username -Password $secpass
-          Add-LocalGroupMember -Group "Administrators" -Member $username
-
-          Write-Host "==============================="
-          Write-Host "Username: $username"
-          Write-Host "Password: $password"
-          Write-Host "==============================="
+          $u="runneradmin"
+          $p="P@ssw0rd123!"
+          New-LocalUser $u -Password (ConvertTo-SecureString $p -AsPlainText -Force)
+          Add-LocalGroupMember -Group "Administrators" -Member $u
+          Write-Host "USER: $u"
+          Write-Host "PASS: $p"
 
       - name: Install Tailscale
         shell: powershell
-        run: |
-          choco install tailscale -y
+        run: choco install tailscale -y
 
-      - name: Connect to Tailscale
+      - name: Connect Tailscale
         shell: powershell
         run: |
-          tailscale up --authkey ${{ secrets.TS_AUTHKEY }}
+          tailscale up --authkey=${{ secrets.TS_AUTHKEY }}
           tailscale ip -4
