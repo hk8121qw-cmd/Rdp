@@ -1,28 +1,43 @@
-name: RDP
+name: Tailscale RDP
 
 on:
   workflow_dispatch:
 
 jobs:
-  secure-rdp:
+  rdp:
     runs-on: windows-latest
     timeout-minutes: 3600
 
     steps:
-      - name: Configure Core RDP Settings
+      - name: Enable Remote Desktop
+        shell: powershell
         run: |
-          # 1. Enable Remote Desktop (fDenyTSConnections = 0)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
-                           -Name "fDenyTSConnections" -Value 0 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 0
+          Enable-NetFirewallRule -DisplayGroup "Remote Desktop"
+          Restart-Service TermService -Force
 
-          # 2. Disable Network Level Authentication (UserAuthentication = 0)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "UserAuthentication" -Value 0 -Force
+      - name: Create RDP User
+        shell: powershell
+        run: |
+          $username = "runneradmin"
+          $password = "P@ssw0rd123!"
+          $secpass = ConvertTo-SecureString $password -AsPlainText -Force
+          New-LocalUser $username -Password $secpass
+          Add-LocalGroupMember -Group "Administrators" -Member $username
 
-          # 3. Set Security Layer to allow older clients/non-NLA (SecurityLayer = 1)
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
-                           -Name "SecurityLayer" -Value 1 -Force
+          Write-Host "==============================="
+          Write-Host "Username: $username"
+          Write-Host "Password: $password"
+          Write-Host "==============================="
 
-          # 4. Allow RDP through the Windows Firewall
-          New-NetFirewallRule -DisplayName "Allow RDP" -Direction Inbound `
-                              -LocalPort 3389 -Protocol TCP -Action Allow -Profile Any
+      - name: Install Tailscale
+        shell: powershell
+        run: |
+          choco install tailscale -y
+
+      - name: Connect to Tailscale
+        shell: powershell
+        run: |
+          tailscale up --authkey ${{ secrets.TS_AUTHKEY }}
+          tailscale ip -4
