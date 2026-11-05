@@ -1,3 +1,4 @@
+
 name: Secure Windows RDP
 
 on:
@@ -16,6 +17,7 @@ jobs:
     timeout-minutes: 350
 
     steps:
+      # STEP 1: Configure Windows RDP
       - name: Configure Secure RDP
         shell: powershell
         run: |
@@ -26,26 +28,30 @@ jobs:
             -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server" `
             -Name "fDenyTSConnections" -Value 0
 
-          # Enforce Network Level Authentication
+          # Enable Network Level Authentication
           Set-ItemProperty `
             -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             -Name "UserAuthentication" -Value 1
 
-          # Use TLS security layer
+          # Enforce TLS security layer
           Set-ItemProperty `
             -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             -Name "SecurityLayer" -Value 2
 
-          # High encryption level
+          # High encryption
           Set-ItemProperty `
             -Path "HKLM:\SYSTEM\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp" `
             -Name "MinEncryptionLevel" -Value 3
 
-          # Remove previous custom firewall rule
-          Remove-NetFirewallRule -DisplayName "Secure-Tailscale-RDP" `
-            -ErrorAction SilentlyContinue
+          # Remove old custom RDP rules
+          Remove-NetFirewallRule -DisplayName "RDP-Tailscale" -ErrorAction SilentlyContinue
+          Remove-NetFirewallRule -DisplayName "Secure-Tailscale-RDP" -ErrorAction SilentlyContinue
 
-          # Allow RDP ONLY from Tailscale IP range
+          # Disable built-in broad RDP firewall rules
+          Get-NetFirewallRule -DisplayGroup "Remote Desktop" -ErrorAction SilentlyContinue |
+            Disable-NetFirewallRule
+
+          # Allow RDP only from Tailscale IPv4 range
           New-NetFirewallRule `
             -DisplayName "Secure-Tailscale-RDP" `
             -Direction Inbound `
@@ -55,12 +61,13 @@ jobs:
             -Action Allow `
             -Profile Any
 
-          # Start Remote Desktop service
+          # Start RDP service
           Set-Service -Name TermService -StartupType Manual
           Start-Service -Name TermService
 
-          Write-Host "Secure RDP configuration completed."
+          Write-Host "Secure RDP configured."
 
+      # STEP 2: Create RDP User
       - name: Create RDP User
         shell: powershell
         env:
@@ -77,24 +84,24 @@ jobs:
 
           if (Get-LocalUser -Name "RDP" -ErrorAction SilentlyContinue) {
             Set-LocalUser -Name "RDP" -Password $securePassword
+            Enable-LocalUser -Name "RDP"
           }
           else {
             New-LocalUser `
               -Name "RDP" `
               -Password $securePassword `
-              -AccountNeverExpires `
-              -PasswordNeverExpires
+              -AccountNeverExpires
           }
 
-          # Add to Remote Desktop Users only, NOT Administrators
-          $rdpGroup = Get-LocalGroup -SID "S-1-5-32-555"
+          # Add user to Remote Desktop Users
           Add-LocalGroupMember `
-            -Group $rdpGroup `
+            -Group "Remote Desktop Users" `
             -Member "RDP" `
             -ErrorAction SilentlyContinue
 
-          Write-Host "RDP account configured."
+          Write-Host "RDP account created."
 
+      # STEP 3: Install Tailscale
       - name: Install Tailscale
         shell: powershell
         run: |
@@ -110,13 +117,14 @@ jobs:
             -Wait -PassThru
 
           if ($process.ExitCode -notin @(0, 3010)) {
-            throw "Tailscale installation failed: $($process.ExitCode)"
+            throw "Tailscale installation failed."
           }
 
           Remove-Item $installer -Force
 
           Write-Host "Tailscale installed."
 
+      # STEP 4: Connect Using Reusable Auth Key
       - name: Connect to Tailscale
         shell: powershell
         env:
@@ -142,9 +150,10 @@ jobs:
             "--accept-dns=false"
 
           if ($LASTEXITCODE -ne 0) {
-            throw "Tailscale connection failed."
+            throw "Tailscale authentication failed."
           }
 
+          # Get Tailscale IP
           $tsIP = $null
 
           for ($i = 0; $i -lt 30; $i++) {
@@ -159,21 +168,22 @@ jobs:
           }
 
           if (-not $tsIP) {
-            throw "Could not obtain Tailscale IPv4 address."
+            throw "Tailscale IP not assigned."
           }
 
-          "TAILSCALE_IP=$tsIP" | Out-File `
-            -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "TAILSCALE_IP=$tsIP" |
+            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
           Write-Host "Tailscale connected."
-          Write-Host "Private RDP IP: $tsIP"
+          Write-Host "Private IP: $tsIP"
 
+      # STEP 5: Verify RDP
       - name: Verify RDP Service
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
-          $listener = $false
+          $listener = $null
 
           for ($i = 0; $i -lt 30; $i++) {
             $listener = Get-NetTCPConnection `
@@ -189,12 +199,13 @@ jobs:
           }
 
           if (-not $listener) {
-            throw "RDP listener is not active."
+            throw "RDP listener not found."
           }
 
-          Write-Host "RDP listener is active."
+          Write-Host "RDP listener active."
           Write-Host "Tailscale IP: $env:TAILSCALE_IP"
 
+      # STEP 6: Display Connection Details
       - name: RDP Connection Information
         shell: powershell
         run: |
@@ -203,14 +214,27 @@ jobs:
           Write-Host "Address  : $env:TAILSCALE_IP"
           Write-Host "Port     : 3389"
           Write-Host "Username : RDP"
-          Write-Host "Password : Stored securely in GitHub Secrets"
+          Write-Host "Password : Check GitHub Secret RDP_PASSWORD"
           Write-Host "================================"
-          Write-Host ""
 
+      # STEP 7: Maintain Connection
       - name: Maintain RDP Session
         shell: powershell
         run: |
           while ($true) {
-            Write-Host "[$(Get-Date)] Secure RDP is running."
+            Write-Host "[$(Get-Date)] Secure RDP running."
             Start-Sleep -Seconds 60
           }
+
+      # STEP 8: Cleanup
+      - name: Tailscale Cleanup
+        if: always()
+        shell: powershell
+        run: |
+          $ts = "$env:ProgramFiles\Tailscale\tailscale.exe"
+
+          if (Test-Path $ts) {
+            & $ts logout
+          }
+
+          Write-Host "Tailscale cleanup completed."
